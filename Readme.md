@@ -1,53 +1,167 @@
-Dataset Usage Disclaimer
+An AI-powered deepfake detection pipeline leveraging Convolutional Neural Networks and LSTM-based temporal modeling to identify manipulated videos with high precision. Optimized for lightweight deployment and real-world use cases.
 
-This project uses publicly available deepfake video datasets strictly for academic research and experimentation.
-The datasets are not included in this repository and cannot be redistributed due to licensing restrictions and file size limitations.
+🚀 Project Overview
+
+This project implements a hybrid CNN + LSTM deep learning architecture capable of analyzing temporal and spatial inconsistencies across video frames to classify whether a video is REAL or FAKE.
+The solution is designed for:
+
+Digital forensics
+
+Social media verification
+
+Video authenticity checks
+
+Academic research
+
+AI/ML-based security systems
+
+The workflow includes:
+
+Video preprocessing
+
+Frame extraction
+
+Temporal feature encoding
+
+Model inference
+
+CLI-based prediction
+
+🧠 Model Architecture
+
+The detection pipeline combines two major components:
+
+1️⃣ CNN Feature Extractor
+
+Learns spatial representations from individual frames.
+Layers include:
+
+Conv2D → ReLU → MaxPool
+
+Conv2D → ReLU → MaxPool
+
+2️⃣ LSTM Temporal Encoder
+
+Captures cross-frame temporal patterns such as:
+
+Lip-sync mismatches
+
+Abnormal facial warping
+
+Frame-level artifacts
+
+Identity inconsistencies
+
+3️⃣ Fully Connected Layer
+
+Outputs a final REAL / FAKE score with sigmoid activation.
+
+📊 Key Features
+
+✔ Lightweight & fast
+✔ Works on CPU and GPU
+✔ Trained on balanced real/fake video datasets
+✔ Modular training & inference scripts
+✔ CLI-based prediction with frame sampling
+✔ Industry-aligned architecture (CNN + LSTM pipeline)
+
+📁 Project Structure
+deepfake_detection/
+│── data/  
+│   ├── real_videos/  
+│   ├── fake_videos/  
+│
+│── output/
+│   └── deepfake_cnn_lstm.pth
+│
+│── src/
+│   ├── train.py
+│   ├── inference.py
+│   └── utils.py
+│
+│── README.md
+
+📥 Dataset Context (No Redistribution)
+
+This project uses widely recognized public deepfake datasets strictly for research and academic purposes.
+The datasets are NOT included in this repository due to licensing restrictions and file size limitations.
 
 Dataset Context
 
-To develop and evaluate the deepfake video detection model, commonly used benchmark datasets were referenced. These datasets typically contain:
-
-Real human face videos
-
-AI-generated/manipulated videos created using techniques such as:
-
-Face swapping
-
-Expression reenactment
-
-Audio-visual inconsistencies
-
-GAN-based synthetic generation
-
-These datasets are widely adopted in deepfake research to ensure:
-
-High model generalization
-
-Exposure to multiple manipulation methods
-
-Real-world variation across lighting, identity, and compression levels
-
-What Was Used During Model Development
-
-For context only (not redistributed), the datasets used generally fall under:
+The training and evaluation process referenced:
 
 Collections of authentic face videos
 
-Collections of manipulated deepfake videos
+Collections of AI-manipulated deepfake videos
 
-Standard train/validation/test splits
+Standard real / fake labels
 
-Preprocessed face-cropped frames extracted from videos
+Face-cropped, preprocessed frames
 
-Each dataset commonly provides:
+Balanced train/val/test splits
 
-Video metadata
+These datasets are commonly used to benchmark deepfake research models and typically include:
 
-Labels indicating real/fake
+FaceSwap/manipulated videos
 
-Benchmark test lists for evaluation
+GAN-generated attacks
 
-Important
+Multi-identity recordings
 
-The datasets referenced during training must be downloaded separately from their official approved sources by anyone attempting to reproduce results.
-This repository includes only the training scripts, model architecture, inference pipeline, and evaluation workflow, not the raw data.
+Metadata and per-video labels
+
+⚠️ IMPORTANT
+
+Anyone wishing to reproduce results must download the datasets from their official approved sources independently.
+This repository includes only code, not the dataset.
+
+▶️ Running Inference
+
+Once your model (deepfake_cnn_lstm.pth) is saved, run:
+
+python inference.py
+
+
+Update this line inside inference.py:
+
+video_path = r"PATH_TO_YOUR_VIDEO.mp4"
+
+
+Output includes:
+
+Prediction score
+
+REAL / FAKE label
+
+Extracted frame count
+
+🛠 Tech Stack
+
+Python
+
+PyTorch
+
+OpenCV
+
+NumPy
+
+torchvision
+
+📌 Future Enhancements
+
+Real-time webcam detection
+
+Transformer-based temporal modeling
+
+Web dashboard for video uploads
+
+Integration with Streamlit or FastAPI
+
+🤝 Contributions
+
+PRs and feature upgrades are welcome!
+If you’d like to collaborate, open an issue or submit a pull request.
+
+❤️ Acknowledgements
+
+This work aligns with ongoing global efforts to combat misinformation and support the development of ethical AI. Special thanks to the research community providing benchmark datasets for deepfake detection.
