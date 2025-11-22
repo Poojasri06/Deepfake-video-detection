@@ -1,0 +1,13 @@
+torch>=1.13
+torchvision
+timm
+opencv-python
+mtcnn
+Pillow
+scikit-learn
+numpy
+pandas
+tqdm
+pyyaml
+streamlit
+watchdog
