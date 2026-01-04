@@ -120,11 +120,12 @@ class DeepfakeDetector(nn.Module):
 # DATASET
 # ==============================
 class VideoDataset(Dataset):
-    def __init__(self, video_path, sequence_length=SEQUENCE_LENGTH, transform=None):
+    def __init__(self, video_path, sequence_length=SEQUENCE_LENGTH, transform=None, device=None):
         self.video_path = video_path
         self.sequence_length = sequence_length
         self.transform = transform
-        self.mtcnn = MTCNN(select_largest=True, device=device, post_process=False)
+        self.device = device if device is not None else torch.device("cpu")
+        self.mtcnn = MTCNN(select_largest=True, device=self.device, post_process=False)
         self.frames = self._load_video_with_faces()
         if len(self.frames) < sequence_length:
             raise ValueError(f"Video too short or insufficient faces detected! Frames: {len(self.frames)} < {sequence_length}")
@@ -134,6 +135,7 @@ class VideoDataset(Dataset):
         frames = []
         frame_count = 0
         max_frames_to_check = 500  # Limit to avoid processing very long videos
+        frame_skip_interval = 2  # Process every other frame for efficiency
         
         while len(frames) < self.sequence_length * 2 and frame_count < max_frames_to_check:
             ret, frame = cap.read()
@@ -141,8 +143,8 @@ class VideoDataset(Dataset):
                 break
             frame_count += 1
             
-            # Skip some frames for efficiency
-            if frame_count % 2 != 0 and len(frames) > 0:
+            # Skip frames for efficiency - process every other frame once we have at least one
+            if frame_count % frame_skip_interval != 0 and len(frames) > 0:
                 continue
                 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -158,8 +160,9 @@ class VideoDataset(Dataset):
                     crop = rgb[y1:y2, x1:x2]
                     if crop.size > 0:
                         frames.append(cv2.resize(crop, (IMAGE_SIZE, IMAGE_SIZE)))
-            except:
+            except Exception as e:
                 # If face detection fails, use the whole frame (fallback)
+                # This handles MTCNN errors gracefully
                 frames.append(cv2.resize(rgb, (IMAGE_SIZE, IMAGE_SIZE)))
                 
         cap.release()
@@ -210,12 +213,9 @@ def load_model():
         st.error(f"Error loading model: {str(e)}")
         return None
 
-# ==============================
-# PREDICTION FUNCTION
-# ==============================
 def predict_video(video_path, ckpt=None):
     try:
-        dataset = VideoDataset(video_path, transform=transform)
+        dataset = VideoDataset(video_path, transform=transform, device=device)
         loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
         model = load_model()
         
