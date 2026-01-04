@@ -2,7 +2,7 @@ torch>=1.13
 torchvision
 timm
 opencv-python
-mtcnn
+facenet-pytorch
 Pillow
 scikit-learn
 numpy

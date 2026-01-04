@@ -3,13 +3,14 @@ import cv2
 import torch
 import torch.nn as nn
 import streamlit as st
-from torchvision import transforms
+from torchvision import transforms, models
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import pandas as pd
 from PIL import Image
 import tempfile
 import time
+from facenet_pytorch import MTCNN
 
 import traceback
 
@@ -36,9 +37,9 @@ st.set_page_config(
 import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-CHECKPOINT_PATH = os.path.join(BASE_DIR, "output", "model_video.pth")
+CHECKPOINT_PATH = os.path.join(BASE_DIR, "output", "deepfake_cnn_lstm.pth")
 SEQUENCE_LENGTH = 16
-IMAGE_SIZE = 224
+IMAGE_SIZE = 112
 BATCH_SIZE = 1
 
 # Verify model file exists
@@ -46,13 +47,28 @@ if not os.path.exists(CHECKPOINT_PATH):
     st.error(f"""
     ❌ Model file not found at: {CHECKPOINT_PATH}
     
-    To use this app, you need to download the pre-trained model file.
+    To use this app, you need to download or train the deepfake detection model.
     
-    1. Download the model file from: [Google Drive](https://drive.google.com/.../model_video.pth)
-    2. Place it in the 'output' folder
-    3. Restart the app
+    **Option 1: Train the model yourself**
+    ```bash
+    # Create the output directory
+    mkdir -p output
     
-    If you don't have the model file, you'll need to train the model first.
+    # Prepare your dataset in the following structure:
+    # data/celebDFv2_real/ (real videos)
+    # data/celebDFv2_fake/ (fake videos)
+    
+    # Train the model
+    python src/train.py
+    ```
+    
+    **Option 2: Use a pre-trained model**
+    1. Obtain a pre-trained model file (deepfake_cnn_lstm.pth)
+    2. Create the output directory: `mkdir -p output`
+    3. Place the model file in the 'output' folder
+    4. Restart the app
+    
+    The model uses EfficientNet-B0 + BiLSTM architecture and expects videos with detectable faces.
     """)
     st.stop()
 
@@ -64,28 +80,41 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ==============================
 # MODEL
 # ==============================
-class ResNetLSTM(nn.Module):
-    def __init__(self, hidden_dim=64, lstm_layers=1, num_classes=2):
+class DeepfakeDetector(nn.Module):
+    """
+    EfficientNet-B0 frame encoder + BiLSTM temporal model + classification head.
+    Input shape for forward: (B, T, C, H, W)
+    Output: logits (B, 2)
+    """
+    def __init__(self, cnn_out_dim=256, lstm_hidden=128, bidirectional=True):
         super().__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv2d(3, 64, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
-        self.flatten = nn.Flatten()
-        self.lstm = nn.LSTM(128, hidden_dim, lstm_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, num_classes)
+        backbone = models.efficientnet_b0(weights="IMAGENET1K_V1")
+        # adapt classifier to produce features
+        if isinstance(backbone.classifier, nn.Sequential):
+            in_feats = backbone.classifier[1].in_features
+            backbone.classifier[1] = nn.Linear(in_feats, cnn_out_dim)
+        else:
+            in_feats = backbone.classifier.in_features
+            backbone.classifier = nn.Sequential(nn.Dropout(0.2), nn.Linear(in_feats, cnn_out_dim))
+
+        self.cnn = backbone
+        self.lstm = nn.LSTM(input_size=cnn_out_dim,
+                            hidden_size=lstm_hidden,
+                            num_layers=1,
+                            batch_first=True,
+                            bidirectional=bidirectional)
+        self.fc = nn.Linear(lstm_hidden * (2 if bidirectional else 1), 2)
 
     def forward(self, x):
-        b, seq_len, c, h, w = x.size()
-        x = x.view(b*seq_len, c, h, w)
-        features = self.cnn(x)
-        features = features.view(b, seq_len, -1)
-        lstm_out, _ = self.lstm(features)
-        return self.fc(lstm_out[:, -1, :])
+        # x: (B, T, C, H, W)
+        B, T, C, H, W = x.shape
+        x = x.view(B * T, C, H, W)
+        feats = self.cnn(x)                # (B*T, cnn_out_dim)
+        feats = feats.view(B, T, -1)       # (B, T, feat)
+        out, _ = self.lstm(feats)          # (B, T, hid*dirs)
+        last = out[:, -1, :]
+        logits = self.fc(last)
+        return logits
 
 # ==============================
 # DATASET
@@ -95,26 +124,55 @@ class VideoDataset(Dataset):
         self.video_path = video_path
         self.sequence_length = sequence_length
         self.transform = transform
-        self.frames = self._load_video()
+        self.mtcnn = MTCNN(select_largest=True, device=device, post_process=False)
+        self.frames = self._load_video_with_faces()
         if len(self.frames) < sequence_length:
-            raise ValueError(f"Video too short! Frames: {len(self.frames)} < {sequence_length}")
+            raise ValueError(f"Video too short or insufficient faces detected! Frames: {len(self.frames)} < {sequence_length}")
 
-    def _load_video(self):
+    def _load_video_with_faces(self):
         cap = cv2.VideoCapture(self.video_path)
         frames = []
-        while True:
+        frame_count = 0
+        max_frames_to_check = 500  # Limit to avoid processing very long videos
+        
+        while len(frames) < self.sequence_length * 2 and frame_count < max_frames_to_check:
             ret, frame = cap.read()
             if not ret:
                 break
-            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            frame_count += 1
+            
+            # Skip some frames for efficiency
+            if frame_count % 2 != 0 and len(frames) > 0:
+                continue
+                
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Try to detect face
+            try:
+                boxes, _ = self.mtcnn.detect(rgb)
+                if boxes is not None and len(boxes) > 0:
+                    x1, y1, x2, y2 = boxes[0]
+                    x1, y1, x2, y2 = map(int, (max(0, x1), max(0, y1), x2, y2))
+                    h, w, _ = rgb.shape
+                    x2, y2 = min(w - 1, x2), min(h - 1, y2)
+                    crop = rgb[y1:y2, x1:x2]
+                    if crop.size > 0:
+                        frames.append(cv2.resize(crop, (IMAGE_SIZE, IMAGE_SIZE)))
+            except:
+                # If face detection fails, use the whole frame (fallback)
+                frames.append(cv2.resize(rgb, (IMAGE_SIZE, IMAGE_SIZE)))
+                
         cap.release()
         return frames
 
     def __len__(self):
-        return max(len(self.frames)-self.sequence_length+1, 0)
+        return max(len(self.frames) - self.sequence_length + 1, 1)
 
     def __getitem__(self, idx):
         seq = self.frames[idx:idx+self.sequence_length]
+        # Pad if necessary
+        while len(seq) < self.sequence_length:
+            seq.append(seq[-1] if seq else np.zeros((IMAGE_SIZE, IMAGE_SIZE, 3), dtype=np.uint8))
         if self.transform:
             seq = [self.transform(Image.fromarray(f)) for f in seq]
         return torch.stack(seq)
@@ -125,7 +183,7 @@ class VideoDataset(Dataset):
 transform = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
 ])
 
 # ==============================
@@ -134,7 +192,7 @@ transform = transforms.Compose([
 @st.cache_resource
 def load_model():
     try:
-        model = ResNetLSTM().to(device)
+        model = DeepfakeDetector().to(device)
         model.eval()
         
         if not os.path.exists(CHECKPOINT_PATH):
@@ -142,9 +200,11 @@ def load_model():
             
         checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
         if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            checkpoint = checkpoint["model_state_dict"]
+            state = checkpoint["model_state_dict"]
+        else:
+            state = checkpoint
             
-        model.load_state_dict(checkpoint, strict=False)
+        model.load_state_dict(state, strict=False)
         return model
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
@@ -169,13 +229,16 @@ def predict_video(video_path, ckpt=None):
             seq = seq.to(device)
             with torch.no_grad():
                 outputs = model(seq)
-                all_probs.append(softmax(outputs).cpu().numpy())
+                probs = softmax(outputs).cpu().numpy()
+                all_probs.append(probs)
                 
         if not all_probs:
             return None
             
+        # Average probabilities across all clips
         avg_probs = np.mean(np.vstack(all_probs), axis=0)
-        return avg_probs[0]  # Return probabilities for the first (and only) video
+        # Return dict with real and fake probabilities
+        return {"real": float(avg_probs[0][0]), "fake": float(avg_probs[0][1])}
         
     except Exception as e:
         st.error(f"Error processing video: {str(e)}")
@@ -216,11 +279,11 @@ def main():
                 with st.spinner('Analyzing video... This may take a moment...'):
                     # Store the temp path in session state
                     st.session_state['temp_video_path'] = temp_path
-                    prediction = predict_video(temp_path)
+                    result = predict_video(temp_path)
                     
-                    if prediction is not None:
-                        prob_real = prediction[0] * 100
-                        prob_fake = prediction[1] * 100
+                    if result is not None:
+                        prob_real = result["real"] * 100
+                        prob_fake = result["fake"] * 100
                         
                         st.subheader("Analysis Results")
                         
