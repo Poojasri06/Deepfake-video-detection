@@ -1,14 +1,6 @@
-torch>=1.13
-altair==4.2.2
-torchvision
-timm
+streamlit
 opencv-python
-mtcnn
-Pillow
-scikit-learn
 numpy
 pandas
-tqdm
-pyyaml
-streamlit
-watchdog
+torch
+altair==4.2.2
