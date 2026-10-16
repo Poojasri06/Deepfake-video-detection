@@ -89,6 +89,9 @@ def analyze_video(video_path: str | Path, loaded: LoadedModel, cfg: InferenceCon
 
     starts, stride = plan_clips(info.frames, cfg)
     warnings: list[str] = []
+    if min(info.width, info.height) < 240:
+        warnings.append(f"Low resolution ({info.width}x{info.height}); the model was not evaluated "
+                        "on low-quality video, so results may be less reliable.")
     if stride != cfg.stride:
         warnings.append(f"Short video: frame stride reduced from {cfg.stride} to {stride}.")
 
