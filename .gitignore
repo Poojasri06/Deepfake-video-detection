@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Data and artifacts (never commit datasets, uploads or weights)
+data/
+datasets/
+uploads/
+tmp/
+output/*.pth
+output/*.pt
+output/*.ckpt
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+!models/*.json
+
+# Logs, caches, secrets
+*.log
+logs/
+.cache/
+.env
+.env.*
+secrets/
+.streamlit/secrets.toml
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
