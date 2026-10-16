@@ -1,269 +1,128 @@
+"""Streamlit app for the CNN + LSTM deepfake video detector.
+
+Uses the same strict loader and pipeline as the CLI. If the trained checkpoint is
+missing or incompatible the app stops with a diagnostic; it never substitutes
+another model. This interim version reports the RAW model score only; the
+REAL / FAKE / INCONCLUSIVE decision is added once thresholds are validated.
+"""
+import logging
 import os
-import cv2
-import torch
-import torch.nn as nn
-import streamlit as st
-from torchvision import transforms
-from torch.utils.data import DataLoader, Dataset
-import numpy as np
-import pandas as pd
-from PIL import Image
 import tempfile
-import time
 
-import traceback
+import pandas as pd
+import streamlit as st
 
-def safe_predict(video_path, ckpt):
-    try:
-        return predict_video(video_path, ckpt)
-    except Exception as e:
-        st.error(f"An error occurred during analysis: {e}")
-        st.text(traceback.format_exc())
-        return None, None
+from src.checkpoint import CheckpointError, load_trained_model
+from src.config import ALLOWED_EXTENSIONS, InferenceConfig
+from src.pipeline import analyze_video, build_face_detector
+from src.video import VideoError
+
+log = logging.getLogger("deepfake.app")
+st.set_page_config(page_title="Deepfake Video Analysis", page_icon="🎭", layout="wide")
+cfg = InferenceConfig()
 
 
-# Set page config
-st.set_page_config(
-    page_title="Deepfake Detection",
-    page_icon="🎭",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+@st.cache_resource(show_spinner="Loading trained model...")
+def get_model(path: str, device: str):
+    return load_trained_model(path, device)
 
-# ==============================
-# CONFIG
-# ==============================
-import os
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-CHECKPOINT_PATH = os.path.join(BASE_DIR, "output", "model_video.pth")
-SEQUENCE_LENGTH = 16
-IMAGE_SIZE = 224
-BATCH_SIZE = 1
 
-# Verify model file exists
-if not os.path.exists(CHECKPOINT_PATH):
-    st.error(f"""
-    ❌ Model file not found at: {CHECKPOINT_PATH}
-    
-    To use this app, you need to download the pre-trained model file.
-    
-    1. Download the model file from: [Google Drive](https://drive.google.com/.../model_video.pth)
-    2. Place it in the 'output' folder
-    3. Restart the app
-    
-    If you don't have the model file, you'll need to train the model first.
-    """)
-    st.stop()
+@st.cache_resource(show_spinner="Loading face detector...")
+def get_detector(device: str):
+    return build_face_detector(next(get_model(cfg.checkpoint_path, cfg.device).model.parameters()).device)
 
-# ==============================
-# DEVICE
-# ==============================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ==============================
-# MODEL
-# ==============================
-class ResNetLSTM(nn.Module):
-    def __init__(self, hidden_dim=64, lstm_layers=1, num_classes=2):
-        super().__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv2d(3, 64, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
-        self.flatten = nn.Flatten()
-        self.lstm = nn.LSTM(128, hidden_dim, lstm_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, num_classes)
+def show_result(res):
+    if res.status != "ok":
+        st.error("Insufficient evidence: the model could not be applied reliably to this video.")
+    else:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Model score, mean (raw P(fake))", f"{res.score_mean:.2f}")
+        c2.metric("Model score, median", f"{res.score_median:.2f}")
+        c3.metric("Clip score range", f"{res.score_min:.2f} - {res.score_max:.2f}")
+        st.info("This is a raw, uncalibrated model score. It is not the probability that the video is "
+                "fake or authentic, and no REAL/FAKE decision is made until thresholds are validated.")
 
-    def forward(self, x):
-        b, seq_len, c, h, w = x.size()
-        x = x.view(b*seq_len, c, h, w)
-        features = self.cnn(x)
-        features = features.view(b, seq_len, -1)
-        lstm_out, _ = self.lstm(features)
-        return self.fc(lstm_out[:, -1, :])
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Clips used", f"{res.clips_used} / {len(res.clips)}")
+    d2.metric("Frames analysed", res.frames_analyzed)
+    d3.metric("Faces detected", f"{res.faces_detected} ({res.face_coverage:.0%})")
+    d4.metric("Processing time", f"{res.elapsed_s:.1f} s")
+    for w in res.warnings:
+        st.warning(w)
 
-# ==============================
-# DATASET
-# ==============================
-class VideoDataset(Dataset):
-    def __init__(self, video_path, sequence_length=SEQUENCE_LENGTH, transform=None):
-        self.video_path = video_path
-        self.sequence_length = sequence_length
-        self.transform = transform
-        self.frames = self._load_video()
-        if len(self.frames) < sequence_length:
-            raise ValueError(f"Video too short! Frames: {len(self.frames)} < {sequence_length}")
+    st.subheader("Per-clip scores")
+    st.dataframe(pd.DataFrame([{
+        "clip start frame": c.start_frame,
+        "frames with face": f"{c.frames_with_face}/{c.frames_read}",
+        "used": c.used,
+        "raw P(fake)": None if c.p_fake is None else round(c.p_fake, 3),
+        "note": c.reason or "",
+    } for c in res.clips]), hide_index=True, use_container_width=True)
 
-    def _load_video(self):
-        cap = cv2.VideoCapture(self.video_path)
-        frames = []
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        cap.release()
-        return frames
+    v = res.video
+    st.caption(f"Video: {v.width}x{v.height}, {v.frames} frames"
+               + (f", {v.fps:.1f} fps, {v.duration_s:.1f} s" if v.fps else "")
+               + f", {v.size_mb:.1f} MB | Model file: {res.model_path} "
+               f"(sha256 {res.model_sha256[:12]}...)")
 
-    def __len__(self):
-        return max(len(self.frames)-self.sequence_length+1, 0)
 
-    def __getitem__(self, idx):
-        seq = self.frames[idx:idx+self.sequence_length]
-        if self.transform:
-            seq = [self.transform(Image.fromarray(f)) for f in seq]
-        return torch.stack(seq)
-
-# ==============================
-# TRANSFORM
-# ==============================
-transform = transforms.Compose([
-    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
-
-# ==============================
-# LOAD MODEL
-# =============================
-@st.cache_resource
-def load_model():
-    try:
-        model = ResNetLSTM().to(device)
-        model.eval()
-        
-        if not os.path.exists(CHECKPOINT_PATH):
-            return None
-            
-        checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            checkpoint = checkpoint["model_state_dict"]
-            
-        model.load_state_dict(checkpoint, strict=False)
-        return model
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        return None
-
-# ==============================
-# PREDICTION FUNCTION
-# ==============================
-def predict_video(video_path, ckpt=None):
-    try:
-        dataset = VideoDataset(video_path, transform=transform)
-        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
-        model = load_model()
-        
-        if model is None:
-            return None
-            
-        softmax = nn.Softmax(dim=1)
-        all_probs = []
-        
-        for seq in loader:
-            seq = seq.to(device)
-            with torch.no_grad():
-                outputs = model(seq)
-                all_probs.append(softmax(outputs).cpu().numpy())
-                
-        if not all_probs:
-            return None
-            
-        avg_probs = np.mean(np.vstack(all_probs), axis=0)
-        return avg_probs[0]  # Return probabilities for the first (and only) video
-        
-    except Exception as e:
-        st.error(f"Error processing video: {str(e)}")
-        return None
-
-# ==============================
-# STREAMLIT UI
-# ==============================
 def main():
-    st.title("🎭 Deepfake Detection App")
-    st.markdown("Upload a video to detect if it contains deepfake content")
-    
-    # Sidebar
-    st.sidebar.title("About")
-    st.sidebar.info(
-        "This app uses a deep learning model to detect deepfake videos. "
-        "Upload a video file to analyze its authenticity."
-    )
-    
-    # Upload section
-    st.header("Upload Video")
-    uploaded_file = st.file_uploader("Choose a video file", type=["mp4", "avi", "mov"])
-    
-    if uploaded_file is not None:
-        # Create a temporary file with a proper extension
-        file_ext = os.path.splitext(uploaded_file.name)[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tfile:
-            tfile.write(uploaded_file.getbuffer())
-            temp_path = tfile.name
-        
-        try:
-            # Display video preview
-            st.subheader("Preview")
-            st.video(temp_path)
-            
-            # Process and display results
-            if st.button("Analyze Video"):
-                with st.spinner('Analyzing video... This may take a moment...'):
-                    # Store the temp path in session state
-                    st.session_state['temp_video_path'] = temp_path
-                    prediction = predict_video(temp_path)
-                    
-                    if prediction is not None:
-                        prob_real = prediction[0] * 100
-                        prob_fake = prediction[1] * 100
-                        
-                        st.subheader("Analysis Results")
-                        
-                        # Display metrics
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.metric("Real", f"{prob_real:.1f}%")
-                            st.progress(prob_real / 100)
-                        
-                        with col2:
-                            st.metric("Fake", f"{prob_fake:.1f}%")
-                            st.progress(prob_fake / 100)
-                        
-                        # Display result message
-                        if prob_fake > 70:
-                            st.error("⚠️ This video is likely a deepfake!")
-                        elif prob_real > 70:
-                            st.success("✅ This video appears to be real!")
-                        else:
-                            st.warning("🤔 The result is inconclusive.")
-                        
-                        # Show confidence level
-                        confidence = max(prob_real, prob_fake)
-                        st.info(f"Confidence: {confidence:.1f}%")
-        finally:
-            # Clean up the temporary file
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except Exception as e:
-                st.error(f"Error cleaning up temporary file: {e}")
-    
-    # Add some spacing
-    st.markdown("---")
-    st.markdown("### How it works")
-    st.markdown("""
-    1. Upload a video file (MP4, AVI, or MOV)
-    2. Click 'Analyze Video' to process the content
-    3. View the analysis results showing the likelihood of the video being real or fake
-    
-    The model analyzes the video frames using a combination of CNN and LSTM networks to detect potential deepfake artifacts.
-    """)
+    st.title("🎭 Deepfake Video Analysis")
+    st.warning("AI assessment only. It is not definitive proof that a video is authentic or manipulated. "
+               "The model was trained on face-manipulation videos and may not detect fully AI-generated video "
+               "or other manipulation types.")
 
-if __name__ == "__main__":
-    main()
+    try:
+        loaded = get_model(cfg.checkpoint_path, cfg.device)
+    except CheckpointError as e:
+        st.error(str(e))
+        st.stop()
+
+    with st.sidebar:
+        st.subheader("Model")
+        st.write(f"File: `{os.path.basename(loaded.path)}`")
+        st.write(f"sha256: `{loaded.sha256[:12]}...`")
+        if loaded.epoch is not None:
+            st.write(f"Checkpoint epoch: {loaded.epoch}")
+        st.write(f"Device: {next(loaded.model.parameters()).device}")
+        st.write(f"Clips per video: {cfg.num_clips} x {cfg.frames_per_clip} frames")
+        st.write(f"Limits: {cfg.max_file_mb:.0f} MB, {cfg.max_duration_s:.0f} s")
+
+    up = st.file_uploader("Upload a video", type=[e.lstrip(".") for e in ALLOWED_EXTENSIONS])
+    if up is None:
+        return
+    if up.size > cfg.max_file_mb * 1024 * 1024:
+        st.error(f"File is {up.size / 1048576:.0f} MB; the limit is {cfg.max_file_mb:.0f} MB.")
+        return
+
+    st.video(up)
+    if not st.button("Analyze video", type="primary"):
+        return
+
+    suffix = os.path.splitext(up.name)[1].lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tf:
+        tf.write(up.getbuffer())
+        tmp = tf.name
+    bar = st.progress(0.0, text="Analysing clips...")
+    try:
+        res = analyze_video(tmp, loaded, cfg, detector=get_detector(cfg.device),
+                            progress=lambda d, t: bar.progress(d / t, text=f"Analysing clips {d}/{t}"))
+        bar.empty()
+        show_result(res)
+    except VideoError as e:
+        bar.empty()
+        st.error(e.message)
+        st.caption("Check the file and try again with another video.")
+    except Exception:
+        bar.empty()
+        log.exception("analysis failed")  # message only; uploaded content is never logged
+        st.error("Unexpected error while analysing the video. Please try again or use a different file.")
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+main()
