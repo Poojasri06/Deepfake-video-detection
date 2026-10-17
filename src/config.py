@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHECKPOINT = ROOT / "output" / "deepfake_cnn_lstm.pth"
+DEFAULT_POLICY = ROOT / "models" / "decision_policy.json"
 ALLOWED_EXTENSIONS = (".mp4", ".avi", ".mov")
 
 
@@ -20,6 +21,8 @@ class InferenceConfig:
     # --- model ---
     checkpoint_path: str = field(default_factory=lambda: _env("DEEPFAKE_CHECKPOINT", str(DEFAULT_CHECKPOINT)))
     device: str = field(default_factory=lambda: _env("DEEPFAKE_DEVICE", "auto"))
+    # Validated decision thresholds (written by the evaluation script). Optional.
+    policy_path: str = field(default_factory=lambda: _env("DEEPFAKE_POLICY", str(DEFAULT_POLICY)))
 
     # --- TRAINING: must match src/train.py CONFIG ---
     frames_per_clip: int = 16
