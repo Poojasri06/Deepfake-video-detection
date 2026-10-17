@@ -81,7 +81,10 @@ def aggregate(scores: list[float]) -> dict[str, float | None]:
 
 def analyze_video(video_path: str | Path, loaded: LoadedModel, cfg: InferenceConfig,
                   detector: FaceDetector | None = None,
-                  progress: Callable[[int, int], None] | None = None) -> AnalysisResult:
+                  progress: Callable[[int, int], None] | None = None,
+                  frame_transform: Callable[[np.ndarray], np.ndarray] | None = None) -> AnalysisResult:
+    """``frame_transform`` (RGB uint8 -> RGB uint8) is applied to every frame before face
+    detection. It exists for robustness evaluation (simulated degradation); the app never sets it."""
     t0 = time.perf_counter()
     info = probe_video(video_path, cfg)
     device = next(loaded.model.parameters()).device
@@ -106,6 +109,8 @@ def analyze_video(video_path: str | Path, loaded: LoadedModel, cfg: InferenceCon
                                 f"analysed {i} of {len(starts)} planned clips.")
                 break
             frames = read_clip(cap, start, stride, cfg.frames_per_clip)
+            if frame_transform is not None:
+                frames = [frame_transform(f) for f in frames]
             faces = [crop_face(f, detector, cfg.image_size, cfg.face_selection) for f in frames]
             n_face = sum(f is not None for f in faces)
             clip = ClipResult(start, len(frames), n_face, used=False)

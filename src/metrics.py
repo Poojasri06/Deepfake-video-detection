@@ -141,3 +141,31 @@ def decision_metrics(y_true, scores, real_below: float, fake_above: float,
         "error_rate_among_decided": (wrong / decided) if decided else None,
         "inconclusive_by_class": {"real": int((inc & (y == 0)).sum()), "fake": int((inc & (y == 1)).sum())},
     }
+
+
+def label_decision_metrics(y_true, labels) -> dict:
+    """Outcome of the three-way decision from the actual labels produced per video.
+
+    ``labels`` are LIKELY_REAL / LIKELY_FAKE / anything else (counted as inconclusive,
+    including videos where no score could be produced). Every video is counted, so poor
+    coverage cannot hide behind a good error rate on the few labelled ones.
+    """
+    y = np.asarray(y_true, dtype=int)
+    lab = np.asarray(labels, dtype=object)
+    if y.shape != lab.shape or len(y) == 0:
+        raise ValueError("y_true and labels must be non-empty and of equal length")
+    fake = lab == "LIKELY_FAKE"
+    real = lab == "LIKELY_REAL"
+    inc = ~(fake | real)
+    n_real, n_fake = int((y == 0).sum()), int((y == 1).sum())
+    fp, fn = int((fake & (y == 0)).sum()), int((real & (y == 1)).sum())
+    decided = int((fake | real).sum())
+    return {
+        "n": int(len(y)), "n_real": n_real, "n_fake": n_fake,
+        "predicted_fake": int(fake.sum()), "predicted_real": int(real.sum()),
+        "inconclusive": int(inc.sum()), "coverage": decided / len(y),
+        "false_positive_rate": _rate(fp, n_real),
+        "false_negative_rate": _rate(fn, n_fake),
+        "error_rate_among_decided": ((fp + fn) / decided) if decided else None,
+        "inconclusive_by_class": {"real": int((inc & (y == 0)).sum()), "fake": int((inc & (y == 1)).sum())},
+    }

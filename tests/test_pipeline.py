@@ -1,5 +1,7 @@
 import math
 
+import torch
+
 import pytest
 
 from src.config import InferenceConfig
@@ -81,3 +83,17 @@ def test_invalid_video_raises_video_error(loaded_model, tmp_path):
 def test_scores_are_finite(loaded_model, video_path):
     res = analyze_video(video_path, loaded_model, CFG, detector=FixedBoxDetector())
     assert all(math.isfinite(c.p_fake) for c in res.clips)
+
+
+def test_model_receives_correctly_shaped_and_scaled_batch(loaded_model, video_path):
+    """The synthetic model ignores its input, so verify the tensor itself."""
+    captured = []
+    h = loaded_model.model.register_forward_hook(lambda m, inp, out: captured.append(inp[0].detach().clone()))
+    try:
+        analyze_video(video_path, loaded_model, CFG, detector=FixedBoxDetector())
+    finally:
+        h.remove()
+    (batch,) = captured
+    assert batch.shape == (CFG.num_clips, CFG.frames_per_clip, 3, CFG.image_size, CFG.image_size)
+    assert batch.dtype == torch.float32 and batch.min() >= -1.0 and batch.max() <= 1.0
+    assert batch.std() > 0.1                      # real image content, not blank/constant frames

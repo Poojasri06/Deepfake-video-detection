@@ -115,25 +115,25 @@ class Decision:
                 INCONCLUSIVE: "Inconclusive", UNVALIDATED: "Not validated"}[self.label]
 
 
-def decide(result: AnalysisResult, policy: DecisionPolicy | None) -> Decision:
-    if result.status != "ok":
+def classify(policy: DecisionPolicy | None, status: str, mean: float | None, median: float | None,
+             coverage: float, smin: float | None, smax: float | None) -> Decision:
+    """The decision rules on plain numbers. Shared by the app and the evaluation tool so
+    that reported test results describe exactly what users see."""
+    if status != "ok":
         return Decision(INCONCLUSIVE, ["Not enough usable faces/clips to apply the model reliably."])
     if policy is None:
         return Decision(UNVALIDATED, [
             "Decision thresholds have not been validated for this checkpoint, so no REAL/FAKE "
-            "label is given. Only the raw model score is available."],
-            score=result.score_mean)
+            "label is given. Only the raw model score is available."], score=mean)
 
-    score = result.score_mean if policy.aggregation == "mean" else result.score_median
+    score = mean if policy.aggregation == "mean" else median
     cal = calibrate(score, policy.calibration) if policy.calibration else None
     reasons: list[str] = []
-    if result.face_coverage < policy.min_face_coverage:
-        reasons.append(f"Face found in only {result.face_coverage:.0%} of sampled frames "
+    if coverage < policy.min_face_coverage:
+        reasons.append(f"Face found in only {coverage:.0%} of sampled frames "
                        f"(needs {policy.min_face_coverage:.0%}).")
-    spread = result.score_max - result.score_min
-    if spread > policy.max_clip_spread:
-        reasons.append(f"Clips disagree strongly (scores range {result.score_min:.2f}-"
-                       f"{result.score_max:.2f}).")
+    if smax - smin > policy.max_clip_spread:
+        reasons.append(f"Clips disagree strongly (scores range {smin:.2f}-{smax:.2f}).")
     if reasons:
         return Decision(INCONCLUSIVE, reasons, score, cal)
 
@@ -146,3 +146,8 @@ def decide(result: AnalysisResult, policy: DecisionPolicy | None) -> Decision:
                         score, cal)
     return Decision(INCONCLUSIVE, [f"Score {score:.2f} lies between the validated thresholds "
                                    f"{policy.real_below:.2f} and {policy.fake_above:.2f}."], score, cal)
+
+
+def decide(result: AnalysisResult, policy: DecisionPolicy | None) -> Decision:
+    return classify(policy, result.status, result.score_mean, result.score_median,
+                    result.face_coverage, result.score_min, result.score_max)
