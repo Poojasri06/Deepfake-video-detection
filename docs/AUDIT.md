@@ -1,5 +1,20 @@
 # Stage A Audit Report
 
+> **Update after the fixes.** The findings below are the original audit and are kept as written.
+> Their status on branch `feature/deepfake-detection-v2`:
+>
+> | Finding | Status |
+> |---|---|
+> | Checkpoint not found | **Still open.** The file must be supplied by the author |
+> | 3.1 `app.py` used a different model | Fixed: app uses `src/model.py` through the strict loader |
+> | 3.2 `strict=False` everywhere | Fixed: `strict=True`, errors instead of random weights (`src/checkpoint.py`) |
+> | 3.3 `evaluate.py` broken | Fixed: replaced by `src/evaluate.py` (validate/score/fit/report) |
+> | 3.4 Inference not matching training sampling | Fixed: clips spread across the video with the training stride and crop/normalisation (tested) |
+> | 3.5 Optimistic validation / leakage | Mitigated in the new evaluation: group-leak and duplicate-content checks. `train.py` itself is unchanged |
+> | 3.6 No calibration or thresholds | Fixed in code: validated policy bound to the checkpoint hash. **No thresholds exist until validation is run** |
+> | 3.7 BiLSTM last-step readout | Open: kept for compatibility; would need retraining |
+> | Section 4 smaller defects | Mostly fixed (requirements, README claims, duplicate README, committed `.pyc`, duplicate model class). Open: `src/dataset.py`/`extract_frames.py` legacy files; MTCNN face ordering follows training |
+
 Repository: `Poojasri06/Deepfake-video-detection`, `main` @ `8f4307d` (12 commits, full history inspected).
 Method: static code reading only. Nothing below was executed, and no metric here is measured.
 

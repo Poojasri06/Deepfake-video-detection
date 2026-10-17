@@ -9,7 +9,6 @@ scikit-learn
 tqdm
 requests
 streamlit
-altair==4.2.2
 
 # Face detection (MTCNN) is in requirements-face.txt because facenet-pytorch pins an
 # old torch. Install it AFTER this file with:  pip install --no-deps -r requirements-face.txt
