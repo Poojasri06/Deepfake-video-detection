@@ -5,7 +5,7 @@
 >
 > | Finding | Status |
 > |---|---|
-> | Checkpoint not found | **Still open.** The file must be supplied by the author |
+> | Checkpoint not found | **Lost.** The author has since deleted the checkpoint and datasets. `src/retrain.py` was added so a new model can be trained and evaluated honestly |
 > | 3.1 `app.py` used a different model | Fixed: app uses `src/model.py` through the strict loader |
 > | 3.2 `strict=False` everywhere | Fixed: `strict=True`, errors instead of random weights (`src/checkpoint.py`) |
 > | 3.3 `evaluate.py` broken | Fixed: replaced by `src/evaluate.py` (validate/score/fit/report) |

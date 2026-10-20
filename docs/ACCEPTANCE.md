@@ -6,8 +6,9 @@ synthetic checkpoints and videos, so it verifies code behaviour, not model accur
 | Criterion | Status | Evidence / what is missing |
 |---|---|---|
 | Original repository preserved | Met | `main` history intact (original commit `8f4307d`); work is on `feature/deepfake-detection-v2`. Note: the author merged some of this branch into `main` through PRs |
-| Original trained checkpoint preserved | **Not applicable yet** | The checkpoint was never in the repository and has not been supplied |
-| App loads the actual trained model | **Not verified** | Loader is tested only with synthetic checkpoints. Needs the real file |
+| Original trained checkpoint preserved | **Not possible** | It was never in the repository, and the author has since deleted it along with the datasets. A new model must be trained |
+| App loads the actual trained model | **Not verified** | No real trained model exists. The loader is tested with synthetic checkpoints and with a checkpoint produced by `src.retrain` on a synthetic task |
+| Retraining path available | Met, verified on synthetic data only | `src/retrain.py`; tests cover parity with inference tensors, leakage refusals, no-overwrite, strict-loadable output. Not run on real deepfake data or a GPU |
 | Preprocessing matches training | Verified for what the code can check | Crop, resize, normalisation, clip stride and frame size tested against `train.py` (tensor equality with the training transform; constants compared with `train.py` CONFIG). Equivalence on real faces not tested |
 | Predictions come from real model inference | Verified (mechanics) | Pipeline runs the model on the exact tensors tested; no meaningful outputs without trained weights |
 | Bad inputs and loading failures handled safely | Verified | Tests for missing, corrupt, wrong-architecture, wrong-shape checkpoints; empty, corrupt, unsupported, oversized, too long, too short videos; no faces |
@@ -19,7 +20,7 @@ synthetic checkpoints and videos, so it verifies code behaviour, not model accur
 
 ## To finish (needs the author's files)
 
-1. Place the trained checkpoint at `output/deepfake_cnn_lstm.pth`.
-2. Build a manifest of labelled videos with source groups and separate `val` and `test` splits.
-3. `python -m src.evaluate validate / score / fit / report` (see README).
+1. Download licensed datasets and build a manifest with source groups and `train` / `val` / `test` splits.
+2. `python -m src.retrain prepare` then `train` on a GPU (see README).
+3. `python -m src.evaluate validate / score / fit / report` on the held-out test split.
 4. Publish the measured report and keep claims within it.

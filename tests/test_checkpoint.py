@@ -120,3 +120,34 @@ def test_explicit_cuda_without_cuda_is_rejected():
 
 def test_auto_device_resolves():
     assert resolve_device("auto").type in {"cpu", "cuda"}
+
+
+def test_preprocessing_mismatch_is_refused(tmp_path, synthetic_state):
+    from src.checkpoint import check_preprocessing_compatible
+    p = tmp_path / "c.pth"
+    torch.save({"model_state_dict": synthetic_state,
+                "config": {"image_size": 64, "frames_per_clip": 8, "stride": 2}}, p)
+    loaded = load_trained_model(p, device="cpu")
+    check_preprocessing_compatible(loaded, 64, 8, 2)                      # matches: fine
+    with pytest.raises(CheckpointError, match="image_size.*64.*112"):
+        check_preprocessing_compatible(loaded, 112, 8, 2)
+    with pytest.raises(CheckpointError, match="frames_per_clip"):
+        check_preprocessing_compatible(loaded, 64, 16, 2)
+
+
+def test_checkpoint_without_config_is_not_blocked(tmp_path, synthetic_state):
+    from src.checkpoint import check_preprocessing_compatible
+    p = tmp_path / "bare.pth"
+    torch.save(synthetic_state, p)
+    check_preprocessing_compatible(load_trained_model(p, device="cpu"), 999, 3, 7)
+
+
+def test_pipeline_refuses_mismatched_model(tmp_path, synthetic_state, video_path):
+    from src.config import InferenceConfig
+    from src.pipeline import analyze_video
+    from tests.conftest import FixedBoxDetector
+    p = tmp_path / "small.pth"
+    torch.save({"model_state_dict": synthetic_state, "config": {"image_size": 64}}, p)
+    with pytest.raises(CheckpointError, match="preprocessing differ"):
+        analyze_video(video_path, load_trained_model(p, device="cpu"),
+                      InferenceConfig(checkpoint_path="x", device="cpu"), detector=FixedBoxDetector())

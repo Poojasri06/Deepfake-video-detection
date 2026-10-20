@@ -13,7 +13,7 @@ three-way assessment: **likely real**, **likely fake / manipulated**, or **incon
 | Item | State |
 |---|---|
 | Code for loading, preprocessing, inference, decision rules, evaluation | Done; covered by automated tests on synthetic data (see `docs/ACCEPTANCE.md`) |
-| The trained checkpoint | **Not in this repository.** You must place it yourself (see below) |
+| The trained checkpoint | **None ships.** The original was deleted by the author and cannot be restored. A new model must be trained (see "Train a new model") |
 | Accuracy / benchmark numbers | **None published.** No result has been reproduced with this code yet, so none is claimed |
 | Decision thresholds | **Not validated** until you run the evaluation on labelled validation videos. Until then the app shows the raw score and "Not validated" |
 | Tested on | Python 3.13, Linux, CPU only. Windows and Python 3.10 commands below were not run by the author of this update |
@@ -34,7 +34,8 @@ in `src/train.py`, which produced the checkpoint.
 
 ### Checkpoint requirements
 
-- Put your trained file at `output/deepfake_cnn_lstm.pth`, or set `DEEPFAKE_CHECKPOINT` to its path.
+- Put the trained file at `output/deepfake_cnn_lstm.pth`, or set `DEEPFAKE_CHECKPOINT` to its path.
+- If the checkpoint records its preprocessing (`image_size`, `frames_per_clip`, `stride`), inference refuses to run when the current settings differ.
 - Accepted formats: the dict written by `train.py` (`model_state_dict`, ...) or a bare state dict.
 - Loading is **strict**. A missing, corrupt, or mismatched file stops with an error. There is no
   fallback to random weights or another model.
@@ -144,23 +145,53 @@ after agreeing to a licence or request form). Datasets named by the original cod
 for this task: Celeb-DF v2 (the paths in `train.py`), FaceForensics++, DFDC. For a meaningful test,
 use data that was **not** used for training and, ideally, manipulation methods the model has not seen.
 
-## Retrain or fine-tune
+## Train a new model
 
-`src/train.py` is the original, unmodified training script. It was **not run** in this update (it
-needs the datasets), so its behaviour is as originally written.
+The original checkpoint no longer exists, so a working model has to be trained again. This produces
+a **new** model. Nothing here can restore the original or reproduce its results, and any new model
+must be evaluated from scratch before any claim is made about it.
 
-```powershell
-python src\train.py --real_dir data\celebDFv2_real --fake_dir data\celebDFv2_fake --output_dir output_v2
-```
+1. **Get data** from the official sources (see Datasets and licences). Build a manifest like the
+   evaluation one, with `split` set to `train`, `val` or `test` and a `group` per source video or
+   identity. Keep the `test` split for the final report only.
+2. **Check it:** `python -m src.evaluate validate manifest.csv`
+3. **Extract face clips once** (train and val only; the test split is never read):
+   ```powershell
+   python -m src.retrain prepare manifest.csv --cache cache_faces --clips-per-video 3
+   ```
+   Disk use is about 0.6 MB per clip at the default size, roughly 1.8 MB per video (5,000 videos is
+   about 9 GB). The command can be re-run to resume.
+4. **Train:**
+   ```powershell
+   python -m src.retrain train --cache cache_faces --out output_v2\deepfake_cnn_lstm_v2.pth --manifest manifest.csv
+   ```
+   A GPU is strongly recommended (free Colab or Kaggle GPUs work); CPU training speed was not
+   measured. The first run downloads ImageNet weights for EfficientNet-B0, so it needs internet.
+   `--init-from some.pth` fine-tunes an existing checkpoint instead.
+5. **Evaluate and use it:** score the `val` and `test` splits, fit thresholds and write the report
+   (see "Evaluate the model"), then point the app at the new file with `DEEPFAKE_CHECKPOINT`.
 
-- **Use a new `--output_dir`.** The script always saves `deepfake_cnn_lstm.pth` inside it and would
-  overwrite your original checkpoint if you point it at `output`. Back the original up first.
-- The script's own validation split is random per video, without source groups, so its F1 can be
-  inflated by shared identities. Do not treat it as a test result. Re-evaluate any new checkpoint
-  with the protocol above on a group-separated test set and compare it with the original there.
-- `src/dataset.py` and `src/extract_frames.py` are legacy files that `train.py` does not use.
-  `extract_frames.py` contains hard-coded `D:\` paths.
-- Training needs a GPU in practice. Throughput was not measured here.
+What the trainer guarantees:
+
+- Face crops and tensors come from the same code as inference, and a test checks the cached tensors
+  are identical to what the inference pipeline feeds the model.
+- It never overwrites a checkpoint, refuses manifests where a source group or identical video sits in
+  two splits, and stops on a cache built with different preprocessing.
+- The best epoch is chosen by validation **video-level ROC-AUC**, not by a fixed threshold. The
+  checkpoint records its settings, data counts, manifest hash and code version.
+
+Caveats:
+
+- Training adds a horizontal flip and mild brightness jitter, which the original script did not.
+- The validation split is used both to pick the epoch and to fit thresholds, so validation figures
+  are optimistic. Only the held-out test report is evidence.
+- The trainer was verified on a small synthetic task only (it learned, the checkpoint loaded through
+  the strict loader, and the inference pipeline scored unseen fake videos higher than real ones).
+  That shows the code path works, not that real deepfakes will be detected, and no accuracy is claimed.
+- `src/train.py` is the original script, kept for reference and unmodified. Its validation split ignores
+  source groups, and it saves `deepfake_cnn_lstm.pth` into its output directory, overwriting any file
+  of that name. Prefer `src.retrain`. `src/dataset.py` and `src/extract_frames.py` are legacy files
+  that nothing uses (`extract_frames.py` has hard-coded `D:\` paths).
 
 ## Resources
 
@@ -196,7 +227,8 @@ src/inference.py        command line scoring of one video
 src/metrics.py          metrics, calibration
 src/policy_fit.py       threshold fitting
 src/evaluate.py         validate / score / fit / report
-src/train.py            original training script (unchanged)
+src/retrain.py          prepare face-clip cache and train a new model
+src/train.py            original training script (unchanged, kept for reference)
 tests/                  automated tests
 docs/                   AUDIT.md, DECISION_POLICY.md, ACCEPTANCE.md
 ```
@@ -206,7 +238,7 @@ checks the code's behaviour, not the model's accuracy.
 
 ## Roadmap
 
-1. Run the real checkpoint through the evaluation protocol and publish measured results.
+1. Train a new model on licensed data with `src.retrain`, evaluate it on a held-out test split, and publish the measured results.
 2. Evaluate on additional datasets and re-encoded (social-media style) videos.
 3. Better face detection/alignment and multi-face handling.
 4. Fix the temporal readout and test whether retraining improves held-out results.

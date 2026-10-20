@@ -95,3 +95,21 @@ def load_trained_model(path: str | Path, device: str = "auto") -> LoadedModel:
         epoch=meta.get("epoch"),
         best_val_f1=meta.get("best_val_f1"),
     )
+
+
+_PREPROCESSING_KEYS = ("image_size", "frames_per_clip", "stride")
+
+
+def check_preprocessing_compatible(loaded: LoadedModel, image_size: int, frames_per_clip: int, stride: int) -> None:
+    """Refuse to run a model with preprocessing different from what it was trained with.
+
+    Only keys recorded in the checkpoint's own ``config`` are compared, so checkpoints that
+    do not record a config are not blocked (nothing can be verified for them).
+    """
+    want = {"image_size": image_size, "frames_per_clip": frames_per_clip, "stride": stride}
+    bad = [f"{k}: checkpoint trained with {loaded.train_config[k]}, inference configured with {want[k]}"
+           for k in _PREPROCESSING_KEYS if k in loaded.train_config and loaded.train_config[k] != want[k]]
+    if bad:
+        raise CheckpointError("Checkpoint and inference preprocessing differ (" + "; ".join(bad) +
+                              "). Predictions would be unreliable; align the configuration with the "
+                              "settings the model was trained with.")

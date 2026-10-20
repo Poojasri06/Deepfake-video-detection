@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 import torch
 
-from src.checkpoint import LoadedModel
+from src.checkpoint import LoadedModel, check_preprocessing_compatible
 from src.config import InferenceConfig
 from src.model import FAKE_INDEX
 from src.video import (FaceDetector, VideoError, VideoInfo, crop_face, fill_missing_faces,
@@ -86,6 +86,7 @@ def analyze_video(video_path: str | Path, loaded: LoadedModel, cfg: InferenceCon
     """``frame_transform`` (RGB uint8 -> RGB uint8) is applied to every frame before face
     detection. It exists for robustness evaluation (simulated degradation); the app never sets it."""
     t0 = time.perf_counter()
+    check_preprocessing_compatible(loaded, cfg.image_size, cfg.frames_per_clip, cfg.stride)
     info = probe_video(video_path, cfg)
     device = next(loaded.model.parameters()).device
     detector = detector or build_face_detector(device)
