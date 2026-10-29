@@ -38,7 +38,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from src.checkpoint import CheckpointError, load_trained_model, resolve_device
 from src.config import InferenceConfig
-from src.evaluate import EvalError, Row, file_id, load_manifest, validate_manifest
+from src.evaluate import EvalError, Row, file_id, load_manifest, make_condition, validate_manifest
 from src.metrics import classification_metrics
 from src.model import FAKE_INDEX, DeepfakeDetector
 from src.pipeline import build_face_detector
@@ -134,11 +134,30 @@ def read_index(cache_dir: str | Path) -> tuple[list[dict], dict]:
     return rows, json.loads((c / "meta.json").read_text())
 
 
-class CachedClips(Dataset):
-    """One random clip per video per epoch (train) or the first clip (deterministic)."""
+def random_degradation():
+    """One random JPEG / downscale / blur setting, applied identically to every frame of a clip.
 
-    def __init__(self, cache_dir, rows: list[dict], train: bool):
-        self.dir, self.rows, self.train = Path(cache_dir), rows, train
+    Works on the 112 px face crops, so it only approximates degradation of the full video frame
+    followed by cropping. It is a robustness aid, not a model of real platform re-encoding.
+    """
+    kind = random.choice(("jpeg", "scale", "blur"))
+    spec = {"jpeg": lambda: f"jpeg:{random.randint(25, 85)}",
+            "scale": lambda: f"scale:{random.uniform(0.4, 0.8):.2f}",
+            "blur": lambda: f"blur:{random.uniform(0.5, 1.5):.2f}"}[kind]()
+    return make_condition(spec)
+
+
+class CachedClips(Dataset):
+    """One random clip per video per epoch (train) or the first clip (deterministic).
+
+    ``degrade_p`` is the chance that a training clip also gets a random compression/blur/downscale
+    degradation (default 0 = off). Evaluation mode never augments.
+    """
+
+    def __init__(self, cache_dir, rows: list[dict], train: bool, degrade_p: float = 0.0):
+        if not 0.0 <= degrade_p <= 1.0:
+            raise EvalError("degrade_p must be between 0 and 1")
+        self.dir, self.rows, self.train, self.degrade_p = Path(cache_dir), rows, train, degrade_p
 
     def __len__(self):
         return len(self.rows)
@@ -152,6 +171,9 @@ class CachedClips(Dataset):
                 clip = clip[:, :, ::-1]
             gain = random.uniform(0.9, 1.1)                             # mild brightness jitter
             clip = np.clip(clip.astype(np.float32) * gain, 0, 255).astype(np.uint8)
+            if self.degrade_p and random.random() < self.degrade_p:
+                degrade = random_degradation()
+                clip = np.stack([degrade(np.ascontiguousarray(f)) for f in clip])
         x = torch.stack([to_tensor(f) for f in clip])                   # same conversion as inference
         return x, torch.tensor(r["label"], dtype=torch.long)
 
@@ -184,7 +206,8 @@ def _git_commit() -> str | None:
 def train(cache_dir: str | Path, out_path: str | Path, cfg: InferenceConfig | None = None,
           epochs: int = 12, batch_size: int = 4, lr: float = 1e-4, seed: int = 42, device: str = "auto",
           pretrained: bool = True, init_from: str | None = None, patience: int | None = None,
-          num_workers: int = 0, manifest_sha256: str | None = None, log=print) -> dict:
+          num_workers: int = 0, manifest_sha256: str | None = None, degrade_p: float = 0.0,
+          log=print) -> dict:
     cfg = cfg or InferenceConfig(checkpoint_path="unused")
     out = Path(out_path)
     if out.exists():
@@ -220,7 +243,7 @@ def train(cache_dir: str | Path, out_path: str | Path, cfg: InferenceConfig | No
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     amp = dev.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
-    loader = DataLoader(CachedClips(cache_dir, tr, True), batch_size=batch_size, shuffle=True,
+    loader = DataLoader(CachedClips(cache_dir, tr, True, degrade_p), batch_size=batch_size, shuffle=True,
                         num_workers=num_workers, drop_last=len(tr) > batch_size,
                         generator=torch.Generator().manual_seed(seed))
 
@@ -261,7 +284,7 @@ def train(cache_dir: str | Path, out_path: str | Path, cfg: InferenceConfig | No
                         "config": config, "epoch": epoch, "best_val_auc": auc,
                         "training": {"lr": lr, "batch_size": batch_size, "seed": seed, "epochs": epochs,
                                      "pretrained_imagenet": bool(pretrained and not init_from),
-                                     "init_from": init_from, "n_train_videos": len(tr),
+                                     "init_from": init_from, "degrade_p": degrade_p, "n_train_videos": len(tr),
                                      "n_val_videos": len(va), "manifest_sha256": manifest_sha256,
                                      "git_commit": _git_commit(), "torch": torch.__version__,
                                      "created": dt.datetime.now().isoformat(timespec="seconds")}}, out)
@@ -295,6 +318,8 @@ def main(argv=None) -> int:
     t.add_argument("--num-workers", type=int, default=0)
     t.add_argument("--patience", type=int, default=None)
     t.add_argument("--init-from", default=None, help="fine-tune from an existing checkpoint")
+    t.add_argument("--degrade-p", type=float, default=0.0,
+                   help="chance (0-1) that a training clip gets random JPEG/blur/downscale; off by default")
     a = ap.parse_args(argv)
     try:
         if a.cmd == "prepare":
@@ -309,7 +334,7 @@ def main(argv=None) -> int:
             mh = hashlib.sha256(Path(a.manifest).read_bytes()).hexdigest() if a.manifest else None
             res = train(a.cache, a.out, epochs=a.epochs, batch_size=a.batch_size, lr=a.lr, seed=a.seed,
                         device=a.device, num_workers=a.num_workers, patience=a.patience,
-                        init_from=a.init_from, manifest_sha256=mh)
+                        init_from=a.init_from, manifest_sha256=mh, degrade_p=a.degrade_p)
             print(f"Best epoch {res['best_epoch']} (val video AUC {res['best_val_video_auc']:.4f}) "
                   f"saved to {res['checkpoint']}.\nNext: evaluate on the held-out test split with "
                   "`python -m src.evaluate` before making any claim about this model.")

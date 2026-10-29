@@ -167,7 +167,8 @@ must be evaluated from scratch before any claim is made about it.
    ```
    A GPU is strongly recommended (free Colab or Kaggle GPUs work); CPU training speed was not
    measured. The first run downloads ImageNet weights for EfficientNet-B0, so it needs internet.
-   `--init-from some.pth` fine-tunes an existing checkpoint instead.
+   `--init-from some.pth` fine-tunes an existing checkpoint instead. `--degrade-p 0.3` gives 30% of
+   training clips a random JPEG, blur or downscale step (off by default; see caveats).
 5. **Evaluate and use it:** score the `val` and `test` splits, fit thresholds and write the report
    (see "Evaluate the model"), then point the app at the new file with `DEEPFAKE_CHECKPOINT`.
 
@@ -183,6 +184,10 @@ What the trainer guarantees:
 Caveats:
 
 - Training adds a horizontal flip and mild brightness jitter, which the original script did not.
+  `--degrade-p` adds optional compression/blur/downscale on the cached 112 px face crops. It is meant
+  to help with re-encoded video but only approximates real platform re-encoding, and its benefit has
+  **not been measured**: compare a run with and without it using the `jpeg:`/`scale:`/`blur:`
+  conditions of `src.evaluate` before keeping it.
 - The validation split is used both to pick the epoch and to fit thresholds, so validation figures
   are optimistic. Only the held-out test report is evidence.
 - The trainer was verified on a small synthetic task only (it learned, the checkpoint loaded through

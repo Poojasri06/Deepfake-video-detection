@@ -136,6 +136,27 @@ def test_cached_dataset_shapes_labels_and_augmentation(rows, tmp_path):
     assert any(not torch.equal(tr[0][0], tr[0][0]) for _ in range(20))  # train mode augments
 
 
+def test_degradation_augmentation_is_opt_in_and_train_only(rows, tmp_path):
+    prepare_cache(rows, tmp_path / "c", SMALL, 3, detector=FixedBoxDetector())
+    index, _ = read_index(tmp_path / "c")
+    arr = np.load(tmp_path / "c" / f"{index[0]['file_id']}.npy")
+    base = {r["file_id"]: r for r in index}
+    # Measure how far a train sample is from the plain (flip/brightness-only) pipeline: with degradation
+    # forced on, high-frequency detail must drop (noise frames lose variance under blur/JPEG/downscale).
+    def detail(ds):
+        return float(np.mean([ds[0][0].diff(dim=-1).abs().mean() for _ in range(30)]))   # mean |horizontal gradient|
+    plain = CachedClips(tmp_path / "c", index, train=True, degrade_p=0.0)
+    degraded = CachedClips(tmp_path / "c", index, train=True, degrade_p=1.0)
+    assert detail(degraded) < detail(plain)
+    # eval mode never augments, even if degrade_p is set
+    ev = CachedClips(tmp_path / "c", index, train=False, degrade_p=1.0)
+    assert torch.equal(ev[0][0], CachedClips(tmp_path / "c", index, train=False)[0][0])
+    x, _ = degraded[0]
+    assert x.shape == (4, 3, 64, 64) and -1.0 <= x.min() and x.max() <= 1.0 and base
+    with pytest.raises(EvalError, match="between 0 and 1"):
+        CachedClips(tmp_path / "c", index, train=True, degrade_p=1.5)
+
+
 def test_video_scores_are_probabilities(rows, tmp_path):
     from src.model import DeepfakeDetector
     prepare_cache(rows, tmp_path / "c", SMALL, 2, detector=FixedBoxDetector())
@@ -168,6 +189,13 @@ def test_train_writes_loadable_checkpoint_with_provenance(cache, tmp_path):
     assert 0.0 <= ck["best_val_auc"] <= 1.0 and loaded.epoch == ck["epoch"]
     rows_ = list(csv.reader(open(out.with_suffix(".log.csv"))))
     assert rows_[0][0] == "epoch" and len(rows_) == 3
+
+
+def test_train_records_degrade_p_and_runs_with_it(cache, tmp_path):
+    out = tmp_path / "d.pth"
+    run_train(cache, out, degrade_p=0.5)
+    assert torch.load(out, map_location="cpu", weights_only=False)["training"]["degrade_p"] == 0.5
+    load_trained_model(out, "cpu")                                       # still strict-loadable
 
 
 def test_train_updates_weights(cache, tmp_path):
