@@ -20,7 +20,7 @@ synthetic checkpoints and videos, so it verifies code behaviour, not model accur
 
 ## To finish (needs the author's files)
 
-1. Download licensed datasets and build a manifest with source groups and `train` / `val` / `test` splits.
+1. Download licensed datasets and build a manifest with source groups and `train` / `val` / `test` splits. For Celeb-DF v2 use `src.make_manifest` (see `docs/DATA_CELEBDF.md`).
 2. `python -m src.retrain prepare` then `train` on a GPU (see README).
 3. `python -m src.evaluate validate / score / fit / report` on the held-out test split.
 4. Publish the measured report and keep claims within it.

@@ -154,6 +154,9 @@ must be evaluated from scratch before any claim is made about it.
 1. **Get data** from the official sources (see Datasets and licences). Build a manifest like the
    evaluation one, with `split` set to `train`, `val` or `test` and a `group` per source video or
    identity. Keep the `test` split for the final report only.
+   For Celeb-DF v2 the manifest can be built for you with an identity-disjoint split:
+   `python -m src.make_manifest celebdf --root D:\data\Celeb-DF-v2 --out manifest.csv`
+   (see `docs/DATA_CELEBDF.md` for access, terms, and what the split does and does not show).
 2. **Check it:** `python -m src.evaluate validate manifest.csv`
 3. **Extract face clips once** (train and val only; the test split is never read):
    ```powershell
@@ -233,6 +236,7 @@ src/metrics.py          metrics, calibration
 src/policy_fit.py       threshold fitting
 src/evaluate.py         validate / score / fit / report
 src/retrain.py          prepare face-clip cache and train a new model
+src/make_manifest.py    build a Celeb-DF v2 manifest with an identity-disjoint split
 src/train.py            original training script (unchanged, kept for reference)
 tests/                  automated tests
 docs/                   AUDIT.md, DECISION_POLICY.md, ACCEPTANCE.md
